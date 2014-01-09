@@ -33,13 +33,11 @@
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
 #else
-#include <ctime>
+#include <chrono>
 #endif
 
 #ifdef _WIN32
 #include <windows.h>
-#else
-#include <sys/time.h>
 #endif
 
 namespace ceres {
@@ -52,9 +50,14 @@ double WallTimeInSeconds() {
 #ifdef _WIN32
   return static_cast<double>(std::time(NULL));
 #else
-  timeval time_val;
-  gettimeofday(&time_val, NULL);
-  return (time_val.tv_sec + time_val.tv_usec * 1e-6);
+  std::chrono::time_point<std::chrono::system_clock> ts, tms;
+  ts = std::chrono::system_clock::now();
+  std::chrono::seconds sec = std::chrono::duration_cast<std::chrono::seconds>(
+                   ts.time_since_epoch());
+  tms = ts - sec;
+  std::chrono::microseconds usec = tms.time_since_epoch();
+
+  return (sec.count() + usec.count() * 1e-6);
 #endif
 #endif
 }

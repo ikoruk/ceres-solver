@@ -378,22 +378,22 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
   options.linear_solver_ordering = NULL;
   options.inner_iteration_ordering = NULL;
 
-#ifndef CERES_USE_OPENMP
-  if (options.num_threads > 1) {
-    LOG(WARNING)
-        << "OpenMP support is not compiled into this binary; "
-        << "only options.num_threads=1 is supported. Switching "
-        << "to single threaded mode.";
-    options.num_threads = 1;
-  }
-  if (options.num_linear_solver_threads > 1) {
-    LOG(WARNING)
-        << "OpenMP support is not compiled into this binary; "
-        << "only options.num_linear_solver_threads=1 is supported. Switching "
-        << "to single threaded mode.";
-    options.num_linear_solver_threads = 1;
-  }
-#endif
+// #ifndef CERES_USE_OPENMP
+//   if (options.num_threads > 1) {
+//     LOG(WARNING)
+//         << "OpenMP support is not compiled into this binary; "
+//         << "only options.num_threads=1 is supported. Switching "
+//         << "to single threaded mode.";
+//     options.num_threads = 1;
+//   }
+//   if (options.num_linear_solver_threads > 1) {
+//     LOG(WARNING)
+//         << "OpenMP support is not compiled into this binary; "
+//         << "only options.num_linear_solver_threads=1 is supported. Switching "
+//         << "to single threaded mode.";
+//     options.num_linear_solver_threads = 1;
+//   }
+// #endif
 
   summary->num_threads_given = original_options.num_threads;
   summary->num_threads_used = options.num_threads;
@@ -734,15 +734,15 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
   options.linear_solver_ordering = NULL;
   options.inner_iteration_ordering = NULL;
 
-#ifndef CERES_USE_OPENMP
-  if (options.num_threads > 1) {
-    LOG(WARNING)
-        << "OpenMP support is not compiled into this binary; "
-        << "only options.num_threads=1 is supported. Switching "
-        << "to single threaded mode.";
-    options.num_threads = 1;
-  }
-#endif  // CERES_USE_OPENMP
+// #ifndef CERES_USE_OPENMP
+//   if (options.num_threads > 1) {
+//     LOG(WARNING)
+//         << "OpenMP support is not compiled into this binary; "
+//         << "only options.num_threads=1 is supported. Switching "
+//         << "to single threaded mode.";
+//     options.num_threads = 1;
+//   }
+// #endif  // CERES_USE_OPENMP
 
   summary->num_threads_given = original_options.num_threads;
   summary->num_threads_used = options.num_threads;

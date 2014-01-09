@@ -32,6 +32,8 @@
 
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
+#else
+#include <thread>
 #endif
 
 #include <algorithm>
@@ -543,8 +545,15 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseCholesky() {
     context_rhs_x[0] = 0.0;
   }
 
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
   for (int r = 0; r < num_rows; ++r) {
+#else
+  std::vector< std::thread > threads;
+  for (int thread_id = 0; thread_id < num_threads; thread_id++) {
+  auto threadFunc = [&,thread_id]() {
+  for (int r = thread_id; r < num_rows; r+=num_threads) {
+#endif
     int row_begin = rows[r];
     int row_end = rows[r + 1];
     if (row_end == row_begin) {
@@ -553,8 +562,6 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseCholesky() {
 
 #  ifdef CERES_USE_OPENMP
     int thread_id = omp_get_thread_num();
-#  else
-    int thread_id = 0;
 #  endif
 
     PerThreadContext* context = contexts[thread_id];
@@ -581,6 +588,12 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseCholesky() {
     }
     context_rhs_x[r] = 0.0;
   }
+#ifndef CERES_USE_OPENMP
+  };
+  threads.push_back(std::thread(threadFunc));
+  }
+  for (auto &t : threads) t.join();
+#endif
 
   for (int i = 0; i < num_threads; ++i) {
     delete contexts[i];
@@ -723,8 +736,15 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseQR() {
   const int num_threads = options_.num_threads;
   scoped_array<double> workspace(new double[num_threads * num_cols]);
 
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
   for (int r = 0; r < num_cols; ++r) {
+#else
+  std::vector< std::thread > threads;
+  for (int thread_id = 0; thread_id < num_threads; thread_id++) {
+  auto threadFunc = [&,thread_id]() {
+  for (int r = thread_id; r < num_cols; r+=num_threads) {
+#endif
     const int row_begin = rows[r];
     const int row_end = rows[r + 1];
     if (row_end == row_begin) {
@@ -733,8 +753,6 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseQR() {
 
 #  ifdef CERES_USE_OPENMP
     int thread_id = omp_get_thread_num();
-#  else
-    int thread_id = 0;
 #  endif
 
     double* solution = workspace.get() + thread_id * num_cols;
@@ -750,6 +768,12 @@ bool CovarianceImpl::ComputeCovarianceValuesUsingSparseQR() {
      values[idx] = solution[inverse_permutation[c]];
     }
   }
+#ifndef CERES_USE_OPENMP
+  };
+  threads.push_back(std::thread(threadFunc));
+  }
+  for (auto &t : threads) t.join();
+#endif
 
   free(permutation);
   cholmod_l_free_sparse(&R, &cc);

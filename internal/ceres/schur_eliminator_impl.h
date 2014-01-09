@@ -47,6 +47,8 @@
 
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
+#else
+#include <thread>
 #endif
 
 #include <algorithm>
@@ -182,8 +184,15 @@ Eliminate(const BlockSparseMatrix* A,
 
   // Add the diagonal to the schur complement.
   if (D != NULL) {
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(num_threads_) schedule(dynamic)
     for (int i = num_eliminate_blocks_; i < num_col_blocks; ++i) {
+ #else
+    std::vector< std::thread > threads;
+    for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
+    auto threadFunc = [&,thread_id]() {
+    for (int i = num_eliminate_blocks_ + thread_id; i < num_col_blocks; i+=num_threads_) {
+#endif
       const int block_id = i - num_eliminate_blocks_;
       int r, c, row_stride, col_stride;
       CellInfo* cell_info = lhs->GetCell(block_id, block_id,
@@ -200,6 +209,12 @@ Eliminate(const BlockSparseMatrix* A,
             += diag.array().square().matrix();
       }
     }
+#ifndef CERES_USE_OPENMP
+    };
+    threads.push_back(std::thread(threadFunc));
+    }
+    for (auto &t : threads) t.join();
+#endif
   }
 
   // Eliminate y blocks one chunk at a time.  For each chunk,x3
@@ -216,12 +231,15 @@ Eliminate(const BlockSparseMatrix* A,
   // term with the y block. EliminateRowOuterProduct does the
   // corresponding operation for the lhs of the reduced linear
   // system.
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(num_threads_) schedule(dynamic)
   for (int i = 0; i < chunks_.size(); ++i) {
-#ifdef CERES_USE_OPENMP
     int thread_id = omp_get_thread_num();
 #else
-    int thread_id = 0;
+  std::vector< std::thread > threads;
+  for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
+  auto threadFunc = [&,thread_id]() {
+  for (int i = thread_id; i < chunks_.size(); i+=num_threads_) {
 #endif
     double* buffer = buffer_.get() + thread_id * buffer_size_;
     const Chunk& chunk = chunks_[i];
@@ -289,6 +307,12 @@ Eliminate(const BlockSparseMatrix* A,
     // S -= F'E(E'E)^{-1}E'F
     ChunkOuterProduct(bs, inverse_ete, buffer, chunk.buffer_layout, lhs);
   }
+#ifndef CERES_USE_OPENMP
+  };
+  threads.push_back(std::thread(threadFunc));
+  }
+  for (auto &t : threads) t.join();
+#endif
 
   // For rows with no e_blocks, the schur complement update reduces to
   // S += F'F.
@@ -304,8 +328,15 @@ BackSubstitute(const BlockSparseMatrix* A,
                const double* z,
                double* y) {
   const CompressedRowBlockStructure* bs = A->block_structure();
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(num_threads_) schedule(dynamic)
   for (int i = 0; i < chunks_.size(); ++i) {
+#else
+  std::vector< std::thread > threads;
+  for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
+  auto threadFunc = [&,thread_id]() {
+  for (int i = thread_id; i < chunks_.size(); i+=num_threads_) {
+#endif
     const Chunk& chunk = chunks_[i];
     const int e_block_id = bs->rows[chunk.start].cells.front().block_id;
     const int e_block_size = bs->cols[e_block_id].size;
@@ -360,6 +391,12 @@ BackSubstitute(const BlockSparseMatrix* A,
 
     ete.llt().solveInPlace(y_block);
   }
+#ifndef CERES_USE_OPENMP
+  };
+  threads.push_back(std::thread(threadFunc));
+  }
+  for (auto &t : threads) t.join();
+#endif
 }
 
 // Update the rhs of the reduced linear system. Compute

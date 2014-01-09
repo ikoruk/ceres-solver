@@ -81,6 +81,8 @@
 
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
+#else
+#include <thread>
 #endif
 
 #include <map>
@@ -106,11 +108,11 @@ class ProgramEvaluator : public Evaluator {
         jacobian_writer_(options, program),
         evaluate_preparers_(
             jacobian_writer_.CreateEvaluatePreparers(options.num_threads)) {
-#ifndef CERES_USE_OPENMP
-    CHECK_EQ(1, options_.num_threads)
-        << "OpenMP support is not compiled into this binary; "
-        << "only options.num_threads=1 is supported.";
-#endif
+// #ifndef CERES_USE_OPENMP
+//     CHECK_EQ(1, options_.num_threads)
+//         << "OpenMP support is not compiled into this binary; "
+//         << "only options.num_threads=1 is supported.";
+// #endif
 
     BuildResidualLayout(*program, &residual_layout_);
     evaluate_scratch_.reset(CreateEvaluatorScratch(*program,
@@ -160,7 +162,11 @@ class ProgramEvaluator : public Evaluator {
     // without breaking out of it. The remaining loop iterations are still run,
     // but with an empty body, and so will finish quickly.
     bool abort = false;
+#ifndef CERES_USE_OPENMP
+    std::mutex abort_mutex;
+#endif
     int num_residual_blocks = program_->NumResidualBlocks();
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(options_.num_threads)
     for (int i = 0; i < num_residual_blocks; ++i) {
 // Disable the loop instead of breaking, as required by OpenMP.
@@ -169,11 +175,28 @@ class ProgramEvaluator : public Evaluator {
         continue;
       }
 
-#ifdef CERES_USE_OPENMP
       int thread_id = omp_get_thread_num();
 #else
-      int thread_id = 0;
+    std::vector< std::thread > threads(options_.num_threads);
+    for (int thread_id = 0; thread_id < options_.num_threads; thread_id++) {
+    auto threadFunc = [&,thread_id]() {
+    for (int i = thread_id; i < num_residual_blocks; i+=options_.num_threads) {
+      abort_mutex.lock();
+      if (abort) {
+        abort_mutex.unlock();
+        continue;
+      }
+      abort_mutex.unlock();
 #endif
+    // int thread_id = 0.0;
+    // for (int i = 0; i < num_residual_blocks; ++i) {
+    //   abort_mutex.lock();
+    //   if (abort) {
+    //     abort_mutex.unlock();
+    //     continue;
+    //   }
+    //   abort_mutex.unlock();
+
       EvaluatePreparer* preparer = &evaluate_preparers_[thread_id];
       EvaluateScratch* scratch = &evaluate_scratch_[thread_id];
 
@@ -204,11 +227,17 @@ class ProgramEvaluator : public Evaluator {
               block_residuals,
               block_jacobians,
               scratch->residual_block_evaluate_scratch.get())) {
-        abort = true;
+#ifdef CERES_USE_OPENMP
 // This ensures that the OpenMP threads have a consistent view of 'abort'. Do
 // the flush inside the failure case so that there is usually only one
 // synchronization point per loop iteration instead of two.
 #pragma omp flush(abort)
+        abort = true;
+#else
+        abort_mutex.lock();
+        abort = true;
+        abort_mutex.unlock();
+#endif
         continue;
       }
 
@@ -242,6 +271,12 @@ class ProgramEvaluator : public Evaluator {
         }
       }
     }
+#ifndef CERES_USE_OPENMP
+    };
+    threads[thread_id] = std::thread(threadFunc);
+    }
+    for (auto &t : threads) t.join();
+#endif
 
     if (!abort) {
       // Sum the cost and gradient (if requested) from each thread.

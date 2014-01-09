@@ -32,6 +32,8 @@
 
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
+#else
+#include <thread>
 #endif
 
 #include <iterator>
@@ -148,14 +150,19 @@ void CoordinateDescentMinimizer::Minimize(
 
     // The parameter blocks in each independent set can be optimized
     // in parallel, since they do not co-occur in any residual block.
+#ifdef CERES_USE_OPENMP
 #pragma omp parallel for num_threads(options.num_threads)
     for (int j = independent_set_offsets_[i];
          j < independent_set_offsets_[i + 1];
          ++j) {
-#ifdef CERES_USE_OPENMP
       int thread_id = omp_get_thread_num();
 #else
-      int thread_id = 0;
+    std::vector< std::thread > threads;
+    for (int thread_id = 0; thread_id < options.num_threads; thread_id++) {
+    auto threadFunc = [&,thread_id]() {
+    for (int j = independent_set_offsets_[i] + thread_id;
+         j < independent_set_offsets_[i + 1];
+         j+=options.num_threads) {
 #endif
 
       ParameterBlock* parameter_block = parameter_blocks_[j];
@@ -188,6 +195,12 @@ void CoordinateDescentMinimizer::Minimize(
       parameter_block->SetState(parameters + parameter_block->state_offset());
       parameter_block->SetConstant();
     }
+#ifndef CERES_USE_OPENMP
+    };
+    threads.push_back(std::thread(threadFunc));
+    }
+    for (auto &t : threads) t.join();
+#endif
   }
 
   for (int i =  0; i < parameter_blocks_.size(); ++i) {
