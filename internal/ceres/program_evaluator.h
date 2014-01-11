@@ -82,7 +82,7 @@
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
 #else
-#include <thread>
+#include <tbb/tbb.h>
 #endif
 
 #include <map>
@@ -107,7 +107,8 @@ class ProgramEvaluator : public Evaluator {
         program_(program),
         jacobian_writer_(options, program),
         evaluate_preparers_(
-            jacobian_writer_.CreateEvaluatePreparers(options.num_threads)) {
+            jacobian_writer_.CreateEvaluatePreparers(options.num_threads)),
+        thread_queue_(options.num_threads) {
 // #ifndef CERES_USE_OPENMP
 //     CHECK_EQ(1, options_.num_threads)
 //         << "OpenMP support is not compiled into this binary; "
@@ -174,19 +175,23 @@ class ProgramEvaluator : public Evaluator {
       if (abort) {
         continue;
       }
-
       int thread_id = omp_get_thread_num();
 #else
-    std::vector< std::thread > threads(options_.num_threads);
-    for (int thread_id = 0; thread_id < options_.num_threads; thread_id++) {
-    auto threadFunc = [&,thread_id]() {
-    for (int i = thread_id; i < num_residual_blocks; i+=options_.num_threads) {
+    tbb::parallel_for(size_t(0), size_t(num_residual_blocks),
+      [&](size_t i) {
       abort_mutex.lock();
       if (abort) {
         abort_mutex.unlock();
-        continue;
+#ifdef CERES_USE_OPENMP
+      continue;
+#else
+      return;
+#endif
       }
       abort_mutex.unlock();
+
+      int thread_id;
+      thread_queue_.wait_and_pop(thread_id);
 #endif
     // int thread_id = 0.0;
     // for (int i = 0; i < num_residual_blocks; ++i) {
@@ -233,12 +238,14 @@ class ProgramEvaluator : public Evaluator {
 // synchronization point per loop iteration instead of two.
 #pragma omp flush(abort)
         abort = true;
+        continue;
 #else
         abort_mutex.lock();
         abort = true;
         abort_mutex.unlock();
+        thread_queue_.push(thread_id);\
+        return;
 #endif
-        continue;
       }
 
       scratch->cost += block_cost;
@@ -270,12 +277,12 @@ class ProgramEvaluator : public Evaluator {
               scratch->gradient.get() + parameter_block->delta_offset());
         }
       }
+#ifndef CERES_USE_OPENMP
+      thread_queue_.push(thread_id);
+#endif
     }
 #ifndef CERES_USE_OPENMP
-    };
-    threads[thread_id] = std::thread(threadFunc);
-    }
-    for (auto &t : threads) t.join();
+    );
 #endif
 
     if (!abort) {
@@ -385,6 +392,9 @@ class ProgramEvaluator : public Evaluator {
   JacobianWriter jacobian_writer_;
   scoped_array<EvaluatePreparer> evaluate_preparers_;
   scoped_array<EvaluateScratch> evaluate_scratch_;
+#ifndef CERES_USE_OPENMP
+  concurrent_queue<int> thread_queue_;
+#endif
   vector<int> residual_layout_;
   ::ceres::internal::ExecutionSummary execution_summary_;
 };

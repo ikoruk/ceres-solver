@@ -40,6 +40,12 @@
 #include <cstddef>
 #include <algorithm>
 
+#ifndef CERES_USE_OPENMP
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#endif
+
 namespace ceres {
 namespace internal {
 
@@ -302,6 +308,55 @@ class ScopedPtrMallocFree {
   inline void operator()(void* x) const {
     free(x);
   }
+};
+
+template<typename Data>
+class concurrent_queue
+{
+private:
+    std::queue<Data> available;
+    mutable std::mutex mutex;
+    std::condition_variable condition;
+public:
+    explicit concurrent_queue(Data size)
+    {
+      for (int i=0; i<size; ++i)
+      {
+        push(i);
+      }
+    }
+    void push(const Data& data)
+    {
+        mutex.lock();
+        available.push(data);
+        mutex.unlock();
+        condition.notify_one();
+    }
+
+    bool empty() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return available.empty();
+    }
+
+    bool try_pop(Data& popped_value)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if(available.empty())
+            return false;
+        popped_value=available.front();
+        available.pop();
+        return true;
+    }
+
+    void wait_and_pop(Data& popped_value)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        while(available.empty())
+            condition.wait(lock);
+        popped_value=available.front();
+        available.pop();
+    }
 };
 
 }  // namespace internal

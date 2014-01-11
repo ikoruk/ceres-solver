@@ -33,7 +33,7 @@
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
 #else
-#include <thread>
+#include <tbb/tbb.h>
 #endif
 
 #include <iterator>
@@ -133,6 +133,9 @@ void CoordinateDescentMinimizer::Minimize(
 
   scoped_array<LinearSolver*> linear_solvers(
       new LinearSolver*[options.num_threads]);
+#ifndef CERES_USE_OPENMP
+  concurrent_queue<int> thread_queue(options.num_threads);
+#endif
 
   LinearSolver::Options linear_solver_options;
   linear_solver_options.type = DENSE_QR;
@@ -157,12 +160,11 @@ void CoordinateDescentMinimizer::Minimize(
          ++j) {
       int thread_id = omp_get_thread_num();
 #else
-    std::vector< std::thread > threads;
-    for (int thread_id = 0; thread_id < options.num_threads; thread_id++) {
-    auto threadFunc = [&,thread_id]() {
-    for (int j = independent_set_offsets_[i] + thread_id;
-         j < independent_set_offsets_[i + 1];
-         j+=options.num_threads) {
+    tbb::parallel_for( size_t(independent_set_offsets_[i]),
+          size_t(independent_set_offsets_[i + 1]),
+        [&](size_t j) {
+      int thread_id;
+      thread_queue.wait_and_pop(thread_id);
 #endif
 
       ParameterBlock* parameter_block = parameter_blocks_[j];
@@ -194,12 +196,12 @@ void CoordinateDescentMinimizer::Minimize(
       parameter_block->set_delta_offset(old_delta_offset);
       parameter_block->SetState(parameters + parameter_block->state_offset());
       parameter_block->SetConstant();
+#ifndef CERES_USE_OPENMP
+      thread_queue.push(thread_id);
+#endif
     }
 #ifndef CERES_USE_OPENMP
-    };
-    threads.push_back(std::thread(threadFunc));
-    }
-    for (auto &t : threads) t.join();
+    );
 #endif
   }
 

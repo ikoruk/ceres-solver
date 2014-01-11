@@ -48,7 +48,7 @@
 #ifdef CERES_USE_OPENMP
 #include <omp.h>
 #else
-#include <thread>
+#include <tbb/tbb.h>
 #endif
 
 #include <algorithm>
@@ -188,10 +188,8 @@ Eliminate(const BlockSparseMatrix* A,
 #pragma omp parallel for num_threads(num_threads_) schedule(dynamic)
     for (int i = num_eliminate_blocks_; i < num_col_blocks; ++i) {
  #else
-    std::vector< std::thread > threads;
-    for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
-    auto threadFunc = [&,thread_id]() {
-    for (int i = num_eliminate_blocks_ + thread_id; i < num_col_blocks; i+=num_threads_) {
+    tbb::parallel_for(num_eliminate_blocks_, num_col_blocks, 1,
+        [&](size_t i) {
 #endif
       const int block_id = i - num_eliminate_blocks_;
       int r, c, row_stride, col_stride;
@@ -210,10 +208,7 @@ Eliminate(const BlockSparseMatrix* A,
       }
     }
 #ifndef CERES_USE_OPENMP
-    };
-    threads.push_back(std::thread(threadFunc));
-    }
-    for (auto &t : threads) t.join();
+    );
 #endif
   }
 
@@ -236,10 +231,11 @@ Eliminate(const BlockSparseMatrix* A,
   for (int i = 0; i < chunks_.size(); ++i) {
     int thread_id = omp_get_thread_num();
 #else
-  std::vector< std::thread > threads;
-  for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
-  auto threadFunc = [&,thread_id]() {
-  for (int i = thread_id; i < chunks_.size(); i+=num_threads_) {
+  concurrent_queue<int> thread_queue(num_threads_);
+  tbb::parallel_for(size_t(0), chunks_.size(),
+      [&](size_t i) {
+    int thread_id;
+    thread_queue.wait_and_pop(thread_id);
 #endif
     double* buffer = buffer_.get() + thread_id * buffer_size_;
     const Chunk& chunk = chunks_[i];
@@ -306,12 +302,12 @@ Eliminate(const BlockSparseMatrix* A,
 
     // S -= F'E(E'E)^{-1}E'F
     ChunkOuterProduct(bs, inverse_ete, buffer, chunk.buffer_layout, lhs);
+#ifndef CERES_USE_OPENMP
+    thread_queue.push(thread_id);
+#endif
   }
 #ifndef CERES_USE_OPENMP
-  };
-  threads.push_back(std::thread(threadFunc));
-  }
-  for (auto &t : threads) t.join();
+  );
 #endif
 
   // For rows with no e_blocks, the schur complement update reduces to
@@ -332,10 +328,8 @@ BackSubstitute(const BlockSparseMatrix* A,
 #pragma omp parallel for num_threads(num_threads_) schedule(dynamic)
   for (int i = 0; i < chunks_.size(); ++i) {
 #else
-  std::vector< std::thread > threads;
-  for (int thread_id = 0; thread_id < num_threads_; thread_id++) {
-  auto threadFunc = [&,thread_id]() {
-  for (int i = thread_id; i < chunks_.size(); i+=num_threads_) {
+  tbb::parallel_for(size_t(0), chunks_.size(),
+      [&](size_t i) {
 #endif
     const Chunk& chunk = chunks_[i];
     const int e_block_id = bs->rows[chunk.start].cells.front().block_id;
@@ -392,10 +386,7 @@ BackSubstitute(const BlockSparseMatrix* A,
     ete.llt().solveInPlace(y_block);
   }
 #ifndef CERES_USE_OPENMP
-  };
-  threads.push_back(std::thread(threadFunc));
-  }
-  for (auto &t : threads) t.join();
+  );
 #endif
 }
 
