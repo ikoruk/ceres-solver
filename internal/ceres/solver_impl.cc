@@ -224,6 +224,180 @@ void SummarizeReducedProgram(const Program& program, Solver::Summary* summary) {
   summary->num_residuals_reduced = program.NumResiduals();
 }
 
+bool ParameterBlocksAreFinite(const ProblemImpl* problem,
+                              string* message) {
+  CHECK_NOTNULL(message);
+  const Program& program = problem->program();
+  const vector<ParameterBlock*>& parameter_blocks = program.parameter_blocks();
+  for (int i = 0; i < parameter_blocks.size(); ++i) {
+    const double* array = parameter_blocks[i]->user_state();
+    const int size = parameter_blocks[i]->Size();
+    const int invalid_index = FindInvalidValue(size, array);
+    if (invalid_index != size) {
+      *message = StringPrintf(
+          "ParameterBlock: %p with size %d has at least one invalid value.\n"
+          "First invalid value is at index: %d.\n"
+          "Parameter block values: ",
+          array, size, invalid_index);
+      AppendArrayToString(size, array, message);
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LineSearchOptionsAreValid(const Solver::Options& options,
+                               string* message) {
+  // Validate values for configuration parameters supplied by user.
+  if ((options.line_search_direction_type == ceres::BFGS ||
+       options.line_search_direction_type == ceres::LBFGS) &&
+      options.line_search_type != ceres::WOLFE) {
+    *message =
+        string("Invalid configuration: require line_search_type == "
+               "ceres::WOLFE when using (L)BFGS to ensure that underlying "
+               "assumptions are guaranteed to be satisfied.");
+    return false;
+  }
+  if (options.max_lbfgs_rank <= 0) {
+    *message =
+        string("Invalid configuration: require max_lbfgs_rank > 0");
+    return false;
+  }
+  if (options.min_line_search_step_size <= 0.0) {
+    *message =
+        "Invalid configuration: require min_line_search_step_size > 0.0.";
+    return false;
+  }
+  if (options.line_search_sufficient_function_decrease <= 0.0) {
+    *message =
+        string("Invalid configuration: require ") +
+        string("line_search_sufficient_function_decrease > 0.0.");
+    return false;
+  }
+  if (options.max_line_search_step_contraction <= 0.0 ||
+      options.max_line_search_step_contraction >= 1.0) {
+    *message = string("Invalid configuration: require ") +
+        string("0.0 < max_line_search_step_contraction < 1.0.");
+    return false;
+  }
+  if (options.min_line_search_step_contraction <=
+      options.max_line_search_step_contraction ||
+      options.min_line_search_step_contraction > 1.0) {
+    *message = string("Invalid configuration: require ") +
+        string("max_line_search_step_contraction < ") +
+        string("min_line_search_step_contraction <= 1.0.");
+    return false;
+  }
+  // Warn user if they have requested BISECTION interpolation, but constraints
+  // on max/min step size change during line search prevent bisection scaling
+  // from occurring. Warn only, as this is likely a user mistake, but one which
+  // does not prevent us from continuing.
+  LOG_IF(WARNING,
+         (options.line_search_interpolation_type == ceres::BISECTION &&
+          (options.max_line_search_step_contraction > 0.5 ||
+           options.min_line_search_step_contraction < 0.5)))
+      << "Line search interpolation type is BISECTION, but specified "
+      << "max_line_search_step_contraction: "
+      << options.max_line_search_step_contraction << ", and "
+      << "min_line_search_step_contraction: "
+      << options.min_line_search_step_contraction
+      << ", prevent bisection (0.5) scaling, continuing with solve regardless.";
+  if (options.max_num_line_search_step_size_iterations <= 0) {
+    *message = string("Invalid configuration: require ") +
+        string("max_num_line_search_step_size_iterations > 0.");
+    return false;
+  }
+  if (options.line_search_sufficient_curvature_decrease <=
+      options.line_search_sufficient_function_decrease ||
+      options.line_search_sufficient_curvature_decrease > 1.0) {
+    *message = string("Invalid configuration: require ") +
+        string("line_search_sufficient_function_decrease < ") +
+        string("line_search_sufficient_curvature_decrease < 1.0.");
+    return false;
+  }
+  if (options.max_line_search_step_expansion <= 1.0) {
+    *message = string("Invalid configuration: require ") +
+        string("max_line_search_step_expansion > 1.0.");
+    return false;
+  }
+  return true;
+}
+
+// Returns true if the program has any non-constant parameter blocks
+// which have non-trivial bounds constraints.
+bool IsBoundsConstrained(const Program& program) {
+  const vector<ParameterBlock*>& parameter_blocks = program.parameter_blocks();
+  for (int i = 0; i < parameter_blocks.size(); ++i) {
+    if (parameter_blocks[i]->IsConstant()) {
+      continue;
+    }
+
+    const double* lower_bounds = parameter_blocks[i]->lower_bounds();
+    const double* upper_bounds = parameter_blocks[i]->upper_bounds();
+    const int size = parameter_blocks[i]->Size();
+    for (int j = 0; j < size; ++j) {
+      if (lower_bounds[j] > -std::numeric_limits<double>::max() ||
+          upper_bounds[j] < std::numeric_limits<double>::max()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Returns false, if the problem has any constant parameter blocks
+// which are not feasible, or any variable parameter blocks which have
+// a lower bound greater than or equal to the upper bound.
+bool ParameterBlocksAreFeasible(const ProblemImpl* problem, string* message) {
+  CHECK_NOTNULL(message);
+  const Program& program = problem->program();
+  const vector<ParameterBlock*>& parameter_blocks = program.parameter_blocks();
+  for (int i = 0; i < parameter_blocks.size(); ++i) {
+    const double* array = parameter_blocks[i]->user_state();
+    const double* lower_bounds = parameter_blocks[i]->lower_bounds();
+    const double* upper_bounds = parameter_blocks[i]->upper_bounds();
+    const int size = parameter_blocks[i]->Size();
+    if (parameter_blocks[i]->IsConstant()) {
+      // Constant parameter blocks must start in the feasible region
+      // to ultimately produce a feasible solution, since Ceres cannot
+      // change them.
+      for (int j = 0; j < size; ++j) {
+        if (array[j] < lower_bounds[j] || array[j] > upper_bounds[j]) {
+          *message = StringPrintf(
+              "ParameterBlock: %p with size %d has at least one infeasible "
+              "value."
+              "\nFirst infeasible value is at index: %d."
+              "\nLower bound: %e, value: %e, upper bound: %e"
+              "\nParameter block values: ",
+              array, size, j, lower_bounds[j], array[j], upper_bounds[j]);
+          AppendArrayToString(size, array, message);
+          return false;
+        }
+      }
+    } else {
+      // Variable parameter blocks must have non-empty feasible
+      // regions, otherwise there is no way to produce a feasible
+      // solution.
+      for (int j = 0; j < size; ++j) {
+        if (lower_bounds[j] >= upper_bounds[j]) {
+          *message = StringPrintf(
+              "ParameterBlock: %p with size %d has at least one infeasible "
+              "bound."
+              "\nFirst infeasible bound is at index: %d."
+              "\nLower bound: %e, upper bound: %e"
+              "\nParameter block values: ",
+              array, size, j, lower_bounds[j], upper_bounds[j]);
+          AppendArrayToString(size, array, message);
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+
 }  // namespace
 
 void SolverImpl::TrustRegionMinimize(
@@ -232,12 +406,18 @@ void SolverImpl::TrustRegionMinimize(
     CoordinateDescentMinimizer* inner_iteration_minimizer,
     Evaluator* evaluator,
     LinearSolver* linear_solver,
-    double* parameters,
     Solver::Summary* summary) {
   Minimizer::Options minimizer_options(options);
+  minimizer_options.is_constrained = IsBoundsConstrained(*program);
 
-  // TODO(sameeragarwal): Add support for logging the configuration
-  // and more detailed stats.
+  // The optimizer works on contiguous parameter vectors; allocate
+  // some.
+  Vector parameters(program->NumParameters());
+
+  // Collect the discontiguous parameters into a contiguous state
+  // vector.
+  program->ParameterBlocksToStateVector(parameters.data());
+
   scoped_ptr<IterationCallback> file_logging_callback;
   if (!options.solver_log.empty()) {
     file_logging_callback.reset(new FileLoggingCallback(options.solver_log));
@@ -252,7 +432,7 @@ void SolverImpl::TrustRegionMinimize(
                                        &logging_callback);
   }
 
-  StateUpdatingCallback updating_callback(program, parameters);
+  StateUpdatingCallback updating_callback(program, parameters.data());
   if (options.update_state_every_iteration) {
     // This must get pushed to the front of the callbacks so that it is run
     // before any of the user callbacks.
@@ -282,19 +462,33 @@ void SolverImpl::TrustRegionMinimize(
 
   TrustRegionMinimizer minimizer;
   double minimizer_start_time = WallTimeInSeconds();
-  minimizer.Minimize(minimizer_options, parameters, summary);
+  minimizer.Minimize(minimizer_options, parameters.data(), summary);
+
+  // If the user aborted mid-optimization or the optimization
+  // terminated because of a numerical failure, then do not update
+  // user state.
+  if (summary->termination_type != USER_FAILURE &&
+      summary->termination_type != FAILURE) {
+    program->StateVectorToParameterBlocks(parameters.data());
+    program->CopyParameterBlockStateToUserState();
+  }
+
   summary->minimizer_time_in_seconds =
       WallTimeInSeconds() - minimizer_start_time;
 }
 
-#ifndef CERES_NO_LINE_SEARCH_MINIMIZER
 void SolverImpl::LineSearchMinimize(
     const Solver::Options& options,
     Program* program,
     Evaluator* evaluator,
-    double* parameters,
     Solver::Summary* summary) {
   Minimizer::Options minimizer_options(options);
+
+  // The optimizer works on contiguous parameter vectors; allocate some.
+  Vector parameters(program->NumParameters());
+
+  // Collect the discontiguous parameters into a contiguous state vector.
+  program->ParameterBlocksToStateVector(parameters.data());
 
   // TODO(sameeragarwal): Add support for logging the configuration
   // and more detailed stats.
@@ -312,7 +506,7 @@ void SolverImpl::LineSearchMinimize(
                                        &logging_callback);
   }
 
-  StateUpdatingCallback updating_callback(program, parameters);
+  StateUpdatingCallback updating_callback(program, parameters.data());
   if (options.update_state_every_iteration) {
     // This must get pushed to the front of the callbacks so that it is run
     // before any of the user callbacks.
@@ -324,11 +518,20 @@ void SolverImpl::LineSearchMinimize(
 
   LineSearchMinimizer minimizer;
   double minimizer_start_time = WallTimeInSeconds();
-  minimizer.Minimize(minimizer_options, parameters, summary);
+  minimizer.Minimize(minimizer_options, parameters.data(), summary);
+
+  // If the user aborted mid-optimization or the optimization
+  // terminated because of a numerical failure, then do not update
+  // user state.
+  if (summary->termination_type != USER_FAILURE &&
+      summary->termination_type != FAILURE) {
+    program->StateVectorToParameterBlocks(parameters.data());
+    program->CopyParameterBlockStateToUserState();
+  }
+
   summary->minimizer_time_in_seconds =
       WallTimeInSeconds() - minimizer_start_time;
 }
-#endif  // CERES_NO_LINE_SEARCH_MINIMIZER
 
 void SolverImpl::Solve(const Solver::Options& options,
                        ProblemImpl* problem_impl,
@@ -342,15 +545,11 @@ void SolverImpl::Solve(const Solver::Options& options,
           << " residual blocks, "
           << problem_impl->NumResiduals()
           << " residuals.";
-
+  *CHECK_NOTNULL(summary) = Solver::Summary();
   if (options.minimizer_type == TRUST_REGION) {
     TrustRegionSolve(options, problem_impl, summary);
   } else {
-#ifndef CERES_NO_LINE_SEARCH_MINIMIZER
     LineSearchSolve(options, problem_impl, summary);
-#else
-    LOG(FATAL) << "Ceres Solver was compiled with -DLINE_SEARCH_MINIMIZER=OFF";
-#endif
   }
 }
 
@@ -363,20 +562,15 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
   Program* original_program = original_problem_impl->mutable_program();
   ProblemImpl* problem_impl = original_problem_impl;
 
-  // Reset the summary object to its default values.
-  *CHECK_NOTNULL(summary) = Solver::Summary();
-
   summary->minimizer_type = TRUST_REGION;
 
   SummarizeGivenProgram(*original_program, summary);
-  SummarizeOrdering(original_options.linear_solver_ordering,
+  SummarizeOrdering(original_options.linear_solver_ordering.get(),
                     &(summary->linear_solver_ordering_given));
-  SummarizeOrdering(original_options.inner_iteration_ordering,
+  SummarizeOrdering(original_options.inner_iteration_ordering.get(),
                     &(summary->inner_iteration_ordering_given));
 
   Solver::Options options(original_options);
-  options.linear_solver_ordering = NULL;
-  options.inner_iteration_ordering = NULL;
 
 // #ifndef CERES_USE_OPENMP
 //   if (options.num_threads > 1) {
@@ -407,6 +601,16 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
     return;
   }
 
+  if (!ParameterBlocksAreFinite(problem_impl, &summary->message)) {
+    LOG(ERROR) << "Terminating: " << summary->message;
+    return;
+  }
+
+  if (!ParameterBlocksAreFeasible(problem_impl, &summary->message)) {
+    LOG(ERROR) << "Terminating: " << summary->message;
+    return;
+  }
+
   event_logger.AddEvent("Init");
 
   original_program->SetParameterBlockStatePtrsToUserStatePtrs();
@@ -430,17 +634,14 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
     problem_impl = gradient_checking_problem_impl.get();
   }
 
-  if (original_options.linear_solver_ordering != NULL) {
-    if (!IsOrderingValid(original_options, problem_impl, &summary->message)) {
+  if (options.linear_solver_ordering.get() != NULL) {
+    if (!IsOrderingValid(options, problem_impl, &summary->message)) {
       LOG(ERROR) << summary->message;
       return;
     }
     event_logger.AddEvent("CheckOrdering");
-    options.linear_solver_ordering =
-        new ParameterBlockOrdering(*original_options.linear_solver_ordering);
-    event_logger.AddEvent("CopyOrdering");
   } else {
-    options.linear_solver_ordering = new ParameterBlockOrdering;
+    options.linear_solver_ordering.reset(new ParameterBlockOrdering);
     const ProblemImpl::ParameterMap& parameter_map =
         problem_impl->parameter_map();
     for (ProblemImpl::ParameterMap::const_iterator it = parameter_map.begin();
@@ -449,13 +650,6 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
       options.linear_solver_ordering->AddElementToGroup(it->first, 0);
     }
     event_logger.AddEvent("ConstructOrdering");
-  }
-
-  if (original_options.inner_iteration_ordering != NULL) {
-    // Make a copy, as the options struct takes ownership of the
-    // ordering objects.
-    options.inner_iteration_ordering =
-        new ParameterBlockOrdering(*original_options.inner_iteration_ordering);
   }
 
   // Create the three objects needed to minimize: the transformed program, the
@@ -470,7 +664,7 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
     return;
   }
 
-  SummarizeOrdering(options.linear_solver_ordering,
+  SummarizeOrdering(options.linear_solver_ordering.get(),
                     &(summary->linear_solver_ordering_used));
   SummarizeReducedProgram(*reduced_program, summary);
 
@@ -553,14 +747,6 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
   }
   event_logger.AddEvent("CreateInnerIterationMinimizer");
 
-  // The optimizer works on contiguous parameter vectors; allocate some.
-  Vector parameters(reduced_program->NumParameters());
-
-  // Collect the discontiguous parameters into a contiguous state vector.
-  reduced_program->ParameterBlocksToStateVector(parameters.data());
-
-  Vector original_parameters = parameters;
-
   double minimizer_start_time = WallTimeInSeconds();
   summary->preprocessor_time_in_seconds =
       minimizer_start_time - solver_start_time;
@@ -571,26 +757,12 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
                       inner_iteration_minimizer.get(),
                       evaluator.get(),
                       linear_solver.get(),
-                      parameters.data(),
                       summary);
   event_logger.AddEvent("Minimize");
 
-  SetSummaryFinalCost(summary);
-
-  // If the user aborted mid-optimization or the optimization
-  // terminated because of a numerical failure, then return without
-  // updating user state.
-  if (summary->termination_type == USER_FAILURE ||
-      summary->termination_type == FAILURE) {
-    return;
-  }
-
   double post_process_start_time = WallTimeInSeconds();
 
-  // Push the contiguous optimized parameters back to the user's
-  // parameters.
-  reduced_program->StateVectorToParameterBlocks(parameters.data());
-  reduced_program->CopyParameterBlockStateToUserState();
+  SetSummaryFinalCost(summary);
 
   // Ensure the program state is set to the user parameters on the way
   // out.
@@ -618,85 +790,6 @@ void SolverImpl::TrustRegionSolve(const Solver::Options& original_options,
   event_logger.AddEvent("PostProcess");
 }
 
-
-#ifndef CERES_NO_LINE_SEARCH_MINIMIZER
-bool LineSearchOptionsAreValid(const Solver::Options& options,
-                               string* message) {
-  // Validate values for configuration parameters supplied by user.
-  if ((options.line_search_direction_type == ceres::BFGS ||
-       options.line_search_direction_type == ceres::LBFGS) &&
-      options.line_search_type != ceres::WOLFE) {
-    *message =
-        string("Invalid configuration: require line_search_type == "
-               "ceres::WOLFE when using (L)BFGS to ensure that underlying "
-               "assumptions are guaranteed to be satisfied.");
-    return false;
-  }
-  if (options.max_lbfgs_rank <= 0) {
-    *message =
-        string("Invalid configuration: require max_lbfgs_rank > 0");
-    return false;
-  }
-  if (options.min_line_search_step_size <= 0.0) {
-    *message =
-        "Invalid configuration: require min_line_search_step_size > 0.0.";
-    return false;
-  }
-  if (options.line_search_sufficient_function_decrease <= 0.0) {
-    *message =
-        string("Invalid configuration: require ") +
-        string("line_search_sufficient_function_decrease > 0.0.");
-    return false;
-  }
-  if (options.max_line_search_step_contraction <= 0.0 ||
-      options.max_line_search_step_contraction >= 1.0) {
-    *message = string("Invalid configuration: require ") +
-        string("0.0 < max_line_search_step_contraction < 1.0.");
-    return false;
-  }
-  if (options.min_line_search_step_contraction <=
-      options.max_line_search_step_contraction ||
-      options.min_line_search_step_contraction > 1.0) {
-    *message = string("Invalid configuration: require ") +
-        string("max_line_search_step_contraction < ") +
-        string("min_line_search_step_contraction <= 1.0.");
-    return false;
-  }
-  // Warn user if they have requested BISECTION interpolation, but constraints
-  // on max/min step size change during line search prevent bisection scaling
-  // from occurring. Warn only, as this is likely a user mistake, but one which
-  // does not prevent us from continuing.
-  LOG_IF(WARNING,
-         (options.line_search_interpolation_type == ceres::BISECTION &&
-          (options.max_line_search_step_contraction > 0.5 ||
-           options.min_line_search_step_contraction < 0.5)))
-      << "Line search interpolation type is BISECTION, but specified "
-      << "max_line_search_step_contraction: "
-      << options.max_line_search_step_contraction << ", and "
-      << "min_line_search_step_contraction: "
-      << options.min_line_search_step_contraction
-      << ", prevent bisection (0.5) scaling, continuing with solve regardless.";
-  if (options.max_num_line_search_step_size_iterations <= 0) {
-    *message = string("Invalid configuration: require ") +
-        string("max_num_line_search_step_size_iterations > 0.");
-    return false;
-  }
-  if (options.line_search_sufficient_curvature_decrease <=
-      options.line_search_sufficient_function_decrease ||
-      options.line_search_sufficient_curvature_decrease > 1.0) {
-    *message = string("Invalid configuration: require ") +
-        string("line_search_sufficient_function_decrease < ") +
-        string("line_search_sufficient_curvature_decrease < 1.0.");
-    return false;
-  }
-  if (options.max_line_search_step_expansion <= 1.0) {
-    *message = string("Invalid configuration: require ") +
-        string("max_line_search_step_expansion > 1.0.");
-    return false;
-  }
-  return true;
-}
-
 void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
                                  ProblemImpl* original_problem_impl,
                                  Solver::Summary* summary) {
@@ -704,9 +797,6 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
 
   Program* original_program = original_problem_impl->mutable_program();
   ProblemImpl* problem_impl = original_problem_impl;
-
-  // Reset the summary object to its default values.
-  *CHECK_NOTNULL(summary) = Solver::Summary();
 
   SummarizeGivenProgram(*original_program, summary);
   summary->minimizer_type = LINE_SEARCH;
@@ -724,6 +814,12 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
     return;
   }
 
+  if (IsBoundsConstrained(problem_impl->program())) {
+    summary->message =  "LINE_SEARCH Minimizer does not support bounds.";
+    LOG(ERROR) << "Terminating: " << summary->message;
+    return;
+  }
+
   Solver::Options options(original_options);
 
   // This ensures that we get a Block Jacobian Evaluator along with
@@ -731,8 +827,7 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
   // refactored to deal with the various bits of cleanups related to
   // line search.
   options.linear_solver_type = CGNR;
-  options.linear_solver_ordering = NULL;
-  options.inner_iteration_ordering = NULL;
+
 
 // #ifndef CERES_USE_OPENMP
 //   if (options.num_threads > 1) {
@@ -747,15 +842,18 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
   summary->num_threads_given = original_options.num_threads;
   summary->num_threads_used = options.num_threads;
 
-  if (original_options.linear_solver_ordering != NULL) {
-    if (!IsOrderingValid(original_options, problem_impl, &summary->message)) {
+  if (!ParameterBlocksAreFinite(problem_impl, &summary->message)) {
+    LOG(ERROR) << "Terminating: " << summary->message;
+    return;
+  }
+
+  if (options.linear_solver_ordering.get() != NULL) {
+    if (!IsOrderingValid(options, problem_impl, &summary->message)) {
       LOG(ERROR) << summary->message;
       return;
     }
-    options.linear_solver_ordering =
-        new ParameterBlockOrdering(*original_options.linear_solver_ordering);
   } else {
-    options.linear_solver_ordering = new ParameterBlockOrdering;
+    options.linear_solver_ordering.reset(new ParameterBlockOrdering);
     const ProblemImpl::ParameterMap& parameter_map =
         problem_impl->parameter_map();
     for (ProblemImpl::ParameterMap::const_iterator it = parameter_map.begin();
@@ -764,6 +862,7 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
       options.linear_solver_ordering->AddElementToGroup(it->first, 0);
     }
   }
+
 
   original_program->SetParameterBlockStatePtrsToUserStatePtrs();
 
@@ -826,38 +925,14 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
     return;
   }
 
-  // The optimizer works on contiguous parameter vectors; allocate some.
-  Vector parameters(reduced_program->NumParameters());
-
-  // Collect the discontiguous parameters into a contiguous state vector.
-  reduced_program->ParameterBlocksToStateVector(parameters.data());
-
-  Vector original_parameters = parameters;
-
   const double minimizer_start_time = WallTimeInSeconds();
   summary->preprocessor_time_in_seconds =
       minimizer_start_time - solver_start_time;
 
   // Run the optimization.
-  LineSearchMinimize(options,
-                     reduced_program.get(),
-                     evaluator.get(),
-                     parameters.data(),
-                     summary);
-
-  // If the user aborted mid-optimization or the optimization
-  // terminated because of a numerical failure, then return without
-  // updating user state.
-  if (summary->termination_type == USER_FAILURE ||
-      summary->termination_type == FAILURE) {
-    return;
-  }
+  LineSearchMinimize(options, reduced_program.get(), evaluator.get(), summary);
 
   const double post_process_start_time = WallTimeInSeconds();
-
-  // Push the contiguous optimized parameters back to the user's parameters.
-  reduced_program->StateVectorToParameterBlocks(parameters.data());
-  reduced_program->CopyParameterBlockStateToUserState();
 
   SetSummaryFinalCost(summary);
 
@@ -877,7 +952,6 @@ void SolverImpl::LineSearchSolve(const Solver::Options& original_options,
   summary->postprocessor_time_in_seconds =
       WallTimeInSeconds() - post_process_start_time;
 }
-#endif  // CERES_NO_LINE_SEARCH_MINIMIZER
 
 bool SolverImpl::IsOrderingValid(const Solver::Options& options,
                                  const ProblemImpl* problem_impl,
@@ -1046,16 +1120,16 @@ Program* SolverImpl::CreateReducedProgram(Solver::Options* options,
                                           ProblemImpl* problem_impl,
                                           double* fixed_cost,
                                           string* error) {
-  CHECK_NOTNULL(options->linear_solver_ordering);
+  CHECK_NOTNULL(options->linear_solver_ordering.get());
   Program* original_program = problem_impl->mutable_program();
   scoped_ptr<Program> transformed_program(new Program(*original_program));
 
   ParameterBlockOrdering* linear_solver_ordering =
-      options->linear_solver_ordering;
+      options->linear_solver_ordering.get();
   const int min_group_id =
       linear_solver_ordering->group_to_elements().begin()->first;
   ParameterBlockOrdering* inner_iteration_ordering =
-      options->inner_iteration_ordering;
+      options->inner_iteration_ordering.get();
   if (!RemoveFixedBlocksFromProgram(transformed_program.get(),
                                     linear_solver_ordering,
                                     inner_iteration_ordering,
@@ -1109,7 +1183,8 @@ Program* SolverImpl::CreateReducedProgram(Solver::Options* options,
     return transformed_program.release();
   }
 
-  if (options->linear_solver_type == SPARSE_NORMAL_CHOLESKY) {
+  if (options->linear_solver_type == SPARSE_NORMAL_CHOLESKY &&
+      !options->dynamic_sparsity) {
     if (!ReorderProgramForSparseNormalCholesky(
             options->sparse_linear_algebra_library_type,
             linear_solver_ordering,
@@ -1128,7 +1203,7 @@ Program* SolverImpl::CreateReducedProgram(Solver::Options* options,
 LinearSolver* SolverImpl::CreateLinearSolver(Solver::Options* options,
                                              string* error) {
   CHECK_NOTNULL(options);
-  CHECK_NOTNULL(options->linear_solver_ordering);
+  CHECK_NOTNULL(options->linear_solver_ordering.get());
   CHECK_NOTNULL(error);
 
   if (options->trust_region_strategy_type == DOGLEG) {
@@ -1231,6 +1306,7 @@ LinearSolver* SolverImpl::CreateLinearSolver(Solver::Options* options,
   linear_solver_options.dense_linear_algebra_library_type =
       options->dense_linear_algebra_library_type;
   linear_solver_options.use_postordering = options->use_postordering;
+  linear_solver_options.dynamic_sparsity = options->dynamic_sparsity;
 
   // Ignore user's postordering preferences and force it to be true if
   // cholmod_camd is not available. This ensures that the linear
@@ -1383,6 +1459,7 @@ Evaluator* SolverImpl::CreateEvaluator(
          ->second.size())
       : 0;
   evaluator_options.num_threads = options.num_threads;
+  evaluator_options.dynamic_sparsity = options.dynamic_sparsity;
   return Evaluator::Create(evaluator_options, program, error);
 }
 
@@ -1398,7 +1475,7 @@ CoordinateDescentMinimizer* SolverImpl::CreateInnerIterationMinimizer(
   scoped_ptr<ParameterBlockOrdering> inner_iteration_ordering;
   ParameterBlockOrdering* ordering_ptr  = NULL;
 
-  if (options.inner_iteration_ordering == NULL) {
+  if (options.inner_iteration_ordering.get() == NULL) {
     // Find a recursive decomposition of the Hessian matrix as a set
     // of independent sets of decreasing size and invert it. This
     // seems to work better in practice, i.e., Cameras before
@@ -1425,7 +1502,7 @@ CoordinateDescentMinimizer* SolverImpl::CreateInnerIterationMinimizer(
         return NULL;
       }
     }
-    ordering_ptr = options.inner_iteration_ordering;
+    ordering_ptr = options.inner_iteration_ordering.get();
   }
 
   if (!inner_iteration_minimizer->Init(program,

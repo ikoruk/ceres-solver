@@ -31,7 +31,16 @@
 #ifndef CERES_PUBLIC_INTERNAL_PORT_H_
 #define CERES_PUBLIC_INTERNAL_PORT_H_
 
+// This file needs to compile as c code.
+#ifdef __cplusplus
+
 #include <string>
+
+#if defined(CERES_TR1_MEMORY_HEADER)
+#include <tr1/memory>
+#else
+#include <memory>
+#endif
 
 namespace ceres {
 
@@ -45,6 +54,24 @@ using namespace std;
 // "string" implementation in the global namespace.
 using std::string;
 
+#if defined(CERES_TR1_SHARED_PTR)
+using std::tr1::shared_ptr;
+#else
+using std::shared_ptr;
+#endif
+
 }  // namespace ceres
+
+#endif  // __cplusplus
+
+// A macro to signal wich functions and classes are exported when
+// bulding a DLL with MSC.
+#if defined(_MSC_VER) && defined(CERES_USING_SHARED_LIBRARY)
+# define CERES_EXPORT __declspec(dllimport)
+#elif defined(_MSC_VER) && defined(CERES_BUILDING_SHARED_LIBRARY)
+# define CERES_EXPORT __declspec(dllexport)
+#else
+# define CERES_EXPORT
+#endif
 
 #endif  // CERES_PUBLIC_INTERNAL_PORT_H_

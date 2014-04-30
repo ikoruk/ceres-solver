@@ -104,11 +104,6 @@ OPTION(CUSTOM_BLAS
 # Multithreading using OpenMP
 OPTION(OPENMP "Enable threaded solving in Ceres (requires OpenMP)" ON)
 
-# Line search minimizer is useful for large scale problems or when
-# sparse linear algebra libraries are not available. If compile time,
-# binary size or compiler performance is an issue, consider disabling
-# this.
-OPTION(LINE_SEARCH_MINIMIZER "Enable the line search minimizer." ON)
 OPTION(BUILD_TESTING "Enable tests" ON)
 OPTION(BUILD_DOCUMENTATION "Build User's Guide (html)" OFF)
 OPTION(BUILD_EXAMPLES "Build examples" ON)
@@ -116,6 +111,17 @@ OPTION(BUILD_SHARED_LIBS "Build Ceres as a shared library." OFF)
 IF (MSVC)
   OPTION(MSVC_USE_STATIC_CRT
     "MS Visual Studio: Use static C-Run Time Library in place of shared." OFF)
+
+  IF ( BUILD_TESTING AND BUILD_SHARED_LIBS)
+    MESSAGE(
+      "-- Disabling tests. The flags BUILD_TESTING and BUILD_SHARED_LIBS"
+      " are incompatible with MSVC."
+    )
+    # Retain the help string associated with the BUILD_TESTING option
+    # and turn testing off.
+    GET_PROPERTY(HELP_STRING CACHE BUILD_TESTING PROPERTY HELPSTRING)
+    SET(BUILD_TESTING OFF CACHE BOOL "${HELP_STRING}" FORCE)
+  ENDIF (BUILD_TESTING AND BUILD_SHARED_LIBS)
 ENDIF (MSVC)
 
 # Prior to October 2013, Ceres used some non-CMake standardised variables to
@@ -355,11 +361,6 @@ IF (NOT SCHUR_SPECIALIZATIONS)
   MESSAGE("-- Disabling Schur specializations (faster compiles)")
 ENDIF (NOT SCHUR_SPECIALIZATIONS)
 
-IF (NOT LINE_SEARCH_MINIMIZER)
-  ADD_DEFINITIONS(-DCERES_NO_LINE_SEARCH_MINIMIZER)
-  MESSAGE("-- Disabling line search minimizer")
-ENDIF (NOT LINE_SEARCH_MINIMIZER)
-
 IF (NOT CUSTOM_BLAS)
   ADD_DEFINITIONS(-DCERES_NO_CUSTOM_BLAS)
   MESSAGE("-- Disabling custom blas")
@@ -405,31 +406,28 @@ ENDIF (OPENMP)
 INCLUDE(CheckIncludeFileCXX)
 CHECK_INCLUDE_FILE_CXX(unordered_map HAVE_STD_UNORDERED_MAP_HEADER)
 IF (HAVE_STD_UNORDERED_MAP_HEADER)
-  # Even so we've found unordered_map header file it doesn't
-  # mean unordered_map and unordered_set will be declared in
-  # std namespace.
+  # Finding the unordered_map header doesn't mean that unordered_map
+  # is in std namespace.
   #
-  # Namely, MSVC 2008 have unordered_map header which declares
-  # unordered_map class in std::tr1 namespace. In order to support
-  # this, we do extra check to see which exactly namespace is
-  # to be used.
-
+  # In particular, MSVC 2008 has unordered_map declared in std::tr1.
+  # In order to support this, we do an extra check to see which
+  # namespace should be used.
   INCLUDE(CheckCXXSourceCompiles)
   CHECK_CXX_SOURCE_COMPILES("#include <unordered_map>
-                            int main() {
-                              std::unordered_map<int, int> map;
-                              return 0;
-                            }"
+                             int main() {
+                               std::unordered_map<int, int> map;
+                               return 0;
+                             }"
                             HAVE_UNORDERED_MAP_IN_STD_NAMESPACE)
   IF (HAVE_UNORDERED_MAP_IN_STD_NAMESPACE)
     ADD_DEFINITIONS(-DCERES_STD_UNORDERED_MAP)
     MESSAGE("-- Found unordered_map/set in std namespace.")
   ELSE (HAVE_UNORDERED_MAP_IN_STD_NAMESPACE)
     CHECK_CXX_SOURCE_COMPILES("#include <unordered_map>
-                              int main() {
-                                std::tr1::unordered_map<int, int> map;
-                                return 0;
-                              }"
+                               int main() {
+                                 std::tr1::unordered_map<int, int> map;
+                                 return 0;
+                               }"
                               HAVE_UNORDERED_MAP_IN_TR1_NAMESPACE)
     IF (HAVE_UNORDERED_MAP_IN_TR1_NAMESPACE)
       ADD_DEFINITIONS(-DCERES_STD_UNORDERED_MAP_IN_TR1_NAMESPACE)
@@ -442,16 +440,29 @@ IF (HAVE_STD_UNORDERED_MAP_HEADER)
     ENDIF (HAVE_UNORDERED_MAP_IN_TR1_NAMESPACE)
   ENDIF (HAVE_UNORDERED_MAP_IN_STD_NAMESPACE)
 ELSE (HAVE_STD_UNORDERED_MAP_HEADER)
-  CHECK_INCLUDE_FILE_CXX("tr1/unordered_map" UNORDERED_MAP_IN_TR1_NAMESPACE)
-  IF (UNORDERED_MAP_IN_TR1_NAMESPACE)
+  CHECK_INCLUDE_FILE_CXX("tr1/unordered_map" HAVE_TR1_UNORDERED_MAP_HEADER)
+  IF (HAVE_TR1_UNORDERED_MAP_HEADER)
     ADD_DEFINITIONS(-DCERES_TR1_UNORDERED_MAP)
     MESSAGE("-- Found tr1/unordered_map/set in std::tr1 namespace.")
-  ELSE (UNORDERED_MAP_IN_TR1_NAMESPACE)
+  ELSE (HAVE_TR1_UNORDERED_MAP_HEADE)
     MESSAGE("-- Unable to find <unordered_map> or <tr1/unordered_map>. ")
     MESSAGE("-- Replacing unordered_map/set with map/set (warning: slower!)")
     ADD_DEFINITIONS(-DCERES_NO_UNORDERED_MAP)
-  ENDIF (UNORDERED_MAP_IN_TR1_NAMESPACE)
+  ENDIF (HAVE_TR1_UNORDERED_MAP_HEADER)
 ENDIF (HAVE_STD_UNORDERED_MAP_HEADER)
+
+INCLUDE(FindSharedPtr)
+FIND_SHARED_PTR()
+IF (SHARED_PTR_FOUND)
+  IF (SHARED_PTR_TR1_MEMORY_HEADER)
+    ADD_DEFINITIONS(-DCERES_TR1_MEMORY_HEADER)
+  ENDIF (SHARED_PTR_TR1_MEMORY_HEADER)
+  IF (SHARED_PTR_TR1_NAMESPACE)
+    ADD_DEFINITIONS(-DCERES_TR1_SHARED_PTR)
+  ENDIF (SHARED_PTR_TR1_NAMESPACE)
+ELSE (SHARED_PTR_FOUND)
+  MESSAGE(FATAL_ERROR "Unable to find shared_ptr.")
+ENDIF (SHARED_PTR_FOUND)
 
 INCLUDE_DIRECTORIES(
   include
@@ -474,6 +485,7 @@ ENDIF (GFLAGS)
 
 IF (BUILD_SHARED_LIBS)
   MESSAGE("-- Building Ceres as a shared library.")
+  ADD_DEFINITIONS(-DCERES_BUILDING_SHARED_LIBRARY)
 ELSE (BUILD_SHARED_LIBS)
   MESSAGE("-- Building Ceres as a static library.")
 ENDIF (BUILD_SHARED_LIBS)
@@ -523,16 +535,16 @@ IF (CMAKE_BUILD_TYPE STREQUAL "Release")
     ENDIF (CMAKE_SYSTEM_NAME MATCHES "Darwin")
   ENDIF (CMAKE_COMPILER_IS_GNUCXX)
   IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # Use of -O4 requires use of gold linker & LLVM-gold plugin, which might
+    # Use of -flto requires use of gold linker & LLVM-gold plugin, which might
     # well not be present / in use and without which files will compile, but
     # not link ('file not recognized') so explicitly check for support
     INCLUDE(CheckCXXCompilerFlag)
-    CHECK_CXX_COMPILER_FLAG("-O4" HAVE_LTO_SUPPORT)
+    CHECK_CXX_COMPILER_FLAG("-flto" HAVE_LTO_SUPPORT)
     IF (HAVE_LTO_SUPPORT)
-      MESSAGE(STATUS "Enabling link-time optimization (-O4)")
-      SET(CERES_CXX_FLAGS "${CERES_CXX_FLAGS} -O4")
+      MESSAGE(STATUS "Enabling link-time optimization (-flto)")
+      SET(CERES_CXX_FLAGS "${CERES_CXX_FLAGS} -flto")
     ELSE ()
-      MESSAGE(STATUS "Compiler/linker does not support link-time optimization (-O4), disabling.")
+      MESSAGE(STATUS "Compiler/linker does not support link-time optimization (-flto), disabling.")
     ENDIF (HAVE_LTO_SUPPORT)
   ENDIF ()
 ENDIF (CMAKE_BUILD_TYPE STREQUAL "Release")

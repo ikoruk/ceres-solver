@@ -326,7 +326,7 @@ TEST(SolverImpl, ReorderResidualBlockNormalFunction) {
 
   Solver::Options options;
   options.linear_solver_type = DENSE_SCHUR;
-  options.linear_solver_ordering = linear_solver_ordering;
+  options.linear_solver_ordering.reset(linear_solver_ordering);
 
   const vector<ResidualBlock*>& residual_blocks =
       problem.program().residual_blocks();
@@ -388,7 +388,7 @@ TEST(SolverImpl, ReorderResidualBlockNormalFunctionWithFixedBlocks) {
 
   Solver::Options options;
   options.linear_solver_type = DENSE_SCHUR;
-  options.linear_solver_ordering = linear_solver_ordering;
+  options.linear_solver_ordering.reset(linear_solver_ordering);
 
   // Create the reduced program. This should remove the fixed block "z",
   // marking the index to -1 at the same time. x and y also get indices.
@@ -457,7 +457,7 @@ TEST(SolverImpl, AutomaticSchurReorderingRespectsConstantBlocks) {
 
   Solver::Options options;
   options.linear_solver_type = DENSE_SCHUR;
-  options.linear_solver_ordering = linear_solver_ordering;
+  options.linear_solver_ordering.reset(linear_solver_ordering);
 
   string message;
   scoped_ptr<Program> reduced_program(
@@ -541,7 +541,7 @@ TEST(SolverImpl, CreateLinearSolverNoSuiteSparse) {
   Solver::Options options;
   options.linear_solver_type = SPARSE_NORMAL_CHOLESKY;
   // CreateLinearSolver assumes a non-empty ordering.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   EXPECT_FALSE(SolverImpl::CreateLinearSolver(&options, &message));
 }
@@ -552,7 +552,7 @@ TEST(SolverImpl, CreateLinearSolverNegativeMaxNumIterations) {
   options.linear_solver_type = DENSE_QR;
   options.max_linear_solver_iterations = -1;
   // CreateLinearSolver assumes a non-empty ordering.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   EXPECT_EQ(SolverImpl::CreateLinearSolver(&options, &message),
             static_cast<LinearSolver*>(NULL));
@@ -563,7 +563,7 @@ TEST(SolverImpl, CreateLinearSolverNegativeMinNumIterations) {
   options.linear_solver_type = DENSE_QR;
   options.min_linear_solver_iterations = -1;
   // CreateLinearSolver assumes a non-empty ordering.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   EXPECT_EQ(SolverImpl::CreateLinearSolver(&options, &message),
             static_cast<LinearSolver*>(NULL));
@@ -574,7 +574,7 @@ TEST(SolverImpl, CreateLinearSolverMaxLessThanMinIterations) {
   options.linear_solver_type = DENSE_QR;
   options.min_linear_solver_iterations = 10;
   options.max_linear_solver_iterations = 5;
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   EXPECT_EQ(SolverImpl::CreateLinearSolver(&options, &message),
             static_cast<LinearSolver*>(NULL));
@@ -586,7 +586,7 @@ TEST(SolverImpl, CreateLinearSolverDenseSchurMultipleThreads) {
   options.num_linear_solver_threads = 2;
   // The Schur type solvers can only be created with the Ordering
   // contains at least one elimination group.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   double x;
   double y;
   options.linear_solver_ordering->AddElementToGroup(&x, 0);
@@ -604,7 +604,7 @@ TEST(SolverImpl, CreateIterativeLinearSolverForDogleg) {
   Solver::Options options;
   options.trust_region_strategy_type = DOGLEG;
   // CreateLinearSolver assumes a non-empty ordering.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   options.linear_solver_type = ITERATIVE_SCHUR;
   EXPECT_EQ(SolverImpl::CreateLinearSolver(&options, &message),
@@ -620,7 +620,7 @@ TEST(SolverImpl, CreateLinearSolverNormalOperation) {
   scoped_ptr<LinearSolver> solver;
   options.linear_solver_type = DENSE_QR;
   // CreateLinearSolver assumes a non-empty ordering.
-  options.linear_solver_ordering = new ParameterBlockOrdering;
+  options.linear_solver_ordering.reset(new ParameterBlockOrdering);
   string message;
   solver.reset(SolverImpl::CreateLinearSolver(&options, &message));
   EXPECT_EQ(options.linear_solver_type, DENSE_QR);
@@ -1083,6 +1083,66 @@ TEST(CompactifyArray, NonContiguousRepeatingEntries) {
 
   SolverImpl::CompactifyArray(&array);
   EXPECT_EQ(array, expected);
+}
+
+TEST(SolverImpl, ProblemHasNanParameterBlocks) {
+  Problem problem;
+  double x[2];
+  x[0] = 1.0;
+  x[1] = std::numeric_limits<double>::quiet_NaN();
+  problem.AddResidualBlock(new MockCostFunctionBase<1, 2, 0, 0>(), NULL, x);
+  Solver::Options options;
+  Solver::Summary summary;
+  Solve(options, &problem, &summary);
+  EXPECT_EQ(summary.termination_type, FAILURE);
+  EXPECT_NE(summary.message.find("has at least one invalid value"),
+            string::npos)
+      << summary.message;
+}
+
+TEST(SolverImpl, BoundsConstrainedProblemWithLineSearchMinimizerDoesNotWork) {
+  Problem problem;
+  double x[] = {0.0, 0.0};
+  problem.AddResidualBlock(new MockCostFunctionBase<1, 2, 0, 0>(), NULL, x);
+  problem.SetParameterUpperBound(x, 0, 1.0);
+  Solver::Options options;
+  options.minimizer_type = LINE_SEARCH;
+  Solver::Summary summary;
+  Solve(options, &problem, &summary);
+  EXPECT_EQ(summary.termination_type, FAILURE);
+  EXPECT_NE(summary.message.find(
+                "LINE_SEARCH Minimizer does not support bounds"),
+            string::npos)
+      << summary.message;
+}
+
+TEST(SolverImpl, InfeasibleParameterBlock) {
+  Problem problem;
+  double x[] = {0.0, 0.0};
+  problem.AddResidualBlock(new MockCostFunctionBase<1, 2, 0, 0>(), NULL, x);
+  problem.SetParameterLowerBound(x, 0, 2.0);
+  problem.SetParameterUpperBound(x, 0, 1.0);
+  Solver::Options options;
+  Solver::Summary summary;
+  Solve(options, &problem, &summary);
+  EXPECT_EQ(summary.termination_type, FAILURE);
+  EXPECT_NE(summary.message.find("infeasible bound"), string::npos)
+      << summary.message;
+}
+
+TEST(SolverImpl, InfeasibleConstantParameterBlock) {
+  Problem problem;
+  double x[] = {0.0, 0.0};
+  problem.AddResidualBlock(new MockCostFunctionBase<1, 2, 0, 0>(), NULL, x);
+  problem.SetParameterLowerBound(x, 0, 1.0);
+  problem.SetParameterUpperBound(x, 0, 2.0);
+  problem.SetParameterBlockConstant(x);
+  Solver::Options options;
+  Solver::Summary summary;
+  Solve(options, &problem, &summary);
+  EXPECT_EQ(summary.termination_type, FAILURE);
+  EXPECT_NE(summary.message.find("infeasible value"), string::npos)
+      << summary.message;
 }
 
 }  // namespace internal

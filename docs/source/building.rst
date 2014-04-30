@@ -1,13 +1,19 @@
 .. _chapter-building:
 
-============
-Installation
-============
+=======================
+Building & Installation
+=======================
 
-Stable Ceres Solver releases are available for download at
-`code.google.com <http://code.google.com/p/ceres-solver/>`_. For the
-more adventurous, the git repository is hosted on `Gerrit
-<https://ceres-solver-review.googlesource.com/>`_.
+Getting the source code
+=======================
+.. _section-source:
+
+You can start with the `latest stable release
+<http://ceres-solver.org/ceres-solver-1.8.0.tar.gz>`_ . Or if you want
+the latest version, you can clone the git repository
+  .. code-block:: bash
+
+       git clone https://ceres-solver.googlesource.com/ceres-solver
 
 .. _section-dependencies:
 
@@ -132,71 +138,88 @@ this.
 
 .. code-block:: bash
 
-    0: f: 4.185660e+06 d: 0.00e+00 g: 1.09e+08 h: 0.00e+00 rho: 0.00e+00 mu: 1.00e+04 li:  0 it: 1.16e-01 tt: 3.39e-01
-    1: f: 1.062590e+05 d: 4.08e+06 g: 8.99e+06 h: 5.36e+02 rho: 9.82e-01 mu: 3.00e+04 li:  1 it: 3.90e-01 tt: 7.29e-01
-    2: f: 4.992817e+04 d: 5.63e+04 g: 8.32e+06 h: 3.19e+02 rho: 6.52e-01 mu: 3.09e+04 li:  1 it: 3.52e-01 tt: 1.08e+00
-    3: f: 1.899774e+04 d: 3.09e+04 g: 1.60e+06 h: 1.24e+02 rho: 9.77e-01 mu: 9.26e+04 li:  1 it: 3.60e-01 tt: 1.44e+00
-    4: f: 1.808729e+04 d: 9.10e+02 g: 3.97e+05 h: 6.39e+01 rho: 9.51e-01 mu: 2.78e+05 li:  1 it: 3.62e-01 tt: 1.80e+00
-    5: f: 1.803399e+04 d: 5.33e+01 g: 1.48e+04 h: 1.23e+01 rho: 9.99e-01 mu: 8.33e+05 li:  1 it: 3.54e-01 tt: 2.16e+00
-    6: f: 1.803390e+04 d: 9.02e-02 g: 6.35e+01 h: 8.00e-01 rho: 1.00e+00 mu: 2.50e+06 li:  1 it: 3.59e-01 tt: 2.52e+00
+   0: f: 4.185660e+06 d: 0.00e+00 g: 1.09e+08 h: 0.00e+00 rho: 0.00e+00 mu: 1.00e+04 li:  0 it: 8.73e-02 tt: 2.61e-01
+   1: f: 1.062590e+05 d: 4.08e+06 g: 8.99e+06 h: 5.36e+02 rho: 9.82e-01 mu: 3.00e+04 li:  1 it: 1.85e-01 tt: 4.46e-01
+   2: f: 4.992817e+04 d: 5.63e+04 g: 8.32e+06 h: 3.19e+02 rho: 6.52e-01 mu: 3.09e+04 li:  1 it: 1.74e-01 tt: 6.20e-01
+   3: f: 1.899774e+04 d: 3.09e+04 g: 1.60e+06 h: 1.24e+02 rho: 9.77e-01 mu: 9.26e+04 li:  1 it: 1.74e-01 tt: 7.94e-01
+   4: f: 1.808729e+04 d: 9.10e+02 g: 3.97e+05 h: 6.39e+01 rho: 9.51e-01 mu: 2.78e+05 li:  1 it: 1.73e-01 tt: 9.67e-01
+   5: f: 1.803399e+04 d: 5.33e+01 g: 1.48e+04 h: 1.23e+01 rho: 9.99e-01 mu: 8.33e+05 li:  1 it: 1.75e-01 tt: 1.14e+00
+   6: f: 1.803390e+04 d: 9.02e-02 g: 6.35e+01 h: 8.00e-01 rho: 1.00e+00 mu: 2.50e+06 li:  1 it: 1.75e-01 tt: 1.32e+00
 
- Ceres Solver Report
- -------------------
-                                      Original                  Reduced
- Parameter blocks                        22122                    22122
- Parameters                              66462                    66462
- Residual blocks                         83718                    83718
- Residual                               167436                   167436
- Trust Region Strategy     LEVENBERG_MARQUARDT
+   Ceres Solver Report
+   -------------------
+                                        Original                  Reduced
+   Parameter blocks                        22122                    22122
+   Parameters                              66462                    66462
+   Residual blocks                         83718                    83718
+   Residual                               167436                   167436
 
-                                         Given                     Used
- Linear solver                     DENSE_SCHUR              DENSE_SCHUR
- Preconditioner                            N/A                      N/A
- Threads:                                    1                        1
- Linear solver threads                       1                        1
- Linear solver ordering              AUTOMATIC                 22106,16
+   Minimizer                        TRUST_REGION
 
- Cost:
- Initial                          4.185660e+06
- Final                            1.803390e+04
- Change                           4.167626e+06
+   Dense linear algebra library            EIGEN
+   Trust region strategy     LEVENBERG_MARQUARDT
 
- Number of iterations:
- Successful                                  6
- Unsuccessful                                0
- Total                                       6
+                                           Given                     Used
+   Linear solver                     DENSE_SCHUR              DENSE_SCHUR
+   Threads                                     1                        1
+   Linear solver threads                       1                        1
+   Linear solver ordering              AUTOMATIC                22106, 16
 
- Time (in seconds):
- Preprocessor                        2.229e-01
+   Cost:
+   Initial                          4.185660e+06
+   Final                            1.803390e+04
+   Change                           4.167626e+06
 
-   Evaluator::Residuals              7.438e-02
-   Evaluator::Jacobians              6.790e-01
-   Linear Solver                     1.681e+00
- Minimizer                           2.547e+00
+   Minimizer iterations                        6
+   Successful steps                            6
+   Unsuccessful steps                          0
 
- Postprocessor                       1.920e-02
- Total                               2.823e+00
+   Time (in seconds):
+   Preprocessor                            0.173
 
- Termination:               FUNCTION_TOLERANCE
+     Residual evaluation                   0.115
+     Jacobian evaluation                   0.498
+     Linear solver                         0.517
+   Minimizer                               1.242
+
+   Postprocessor                           0.003
+   Total                                   1.437
+
+   Termination:                      CONVERGENCE (Function tolerance reached. |cost_change|/cost: 1.769750e-09 <= 1.000000e-06)
 
 .. section-osx:
 
 Building on Mac OS X
 ====================
-
-On OS X, we recommend using the `homebrew
-<http://mxcl.github.com/homebrew/>`_ package manager to install the
-dependencies. There is no need to install ``BLAS`` or ``LAPACK``
-separately as OS X ships with optimized ``BLAS`` and ``LAPACK``
-routines as part of the `vecLib
-<https://developer.apple.com/library/mac/#documentation/Performance/Conceptual/vecLib/Reference/reference.html>`_
-framework.
-
 .. NOTE::
 
  Ceres will not compile using Xcode 4.5.x (Clang version 4.1) due to a bug in that version of
  Clang.  If you are running Xcode 4.5.x, please update to Xcode >= 4.6.x before attempting to
  build Ceres.
+
+
+On OS X, we recommend using the `homebrew
+<http://mxcl.github.com/homebrew/>`_ package manager to install Ceres.
+
+.. code-block:: bash
+
+      brew install ceres-solver
+
+will install the latest stable version along with all the required
+dependencies and
+
+.. code-block:: bash
+
+      brew install ceres-solver --HEAD
+
+will install the latest version in the git repo.
+
+You can also install each of the dependencies by hand using `homebrew
+<http://mxcl.github.com/homebrew/>`_. There is no need to install
+``BLAS`` or ``LAPACK`` separately as OS X ships with optimized
+``BLAS`` and ``LAPACK`` routines as part of the `vecLib
+<https://developer.apple.com/library/mac/#documentation/Performance/Conceptual/vecLib/Reference/reference.html>`_
+framework.
 
 .. code-block:: bash
 
@@ -209,7 +232,6 @@ framework.
       # SuiteSparse and CXSparse
       brew install suite-sparse
 
-
 We are now ready to build and test Ceres.
 
 .. code-block:: bash
@@ -220,7 +242,6 @@ We are now ready to build and test Ceres.
    cmake ../ceres-solver-1.8.0
    make -j3
    make test
-
 
 Like the Linux build, you should now be able to run
 ``bin/simple_bundle_adjuster``.
@@ -289,7 +310,9 @@ Notes:
 
 #. The default build is Debug; consider switching it to release mode.
 #. Currently ``system_test`` is not working properly.
-#. Building Ceres as a DLL is not supported; patches welcome.
+#. If you build Ceres as a DLL with Visual Studio (BUILD_SHARED_LIBS),
+   you have to compile your own code with the flag
+   CERES_USING_SHARED_LIBRARY.
 #. CMake puts the resulting test binaries in ``ceres-bin/examples/Debug``
    by default.
 #. The solvers supported on Windows are ``DENSE_QR``, ``DENSE_SCHUR``,
@@ -369,12 +392,6 @@ Options controlling Ceres configuration
    binary size/compilation time over some small (10-20%) performance
    gains in the ``SPARSE_SCHUR`` solver, you can disable some of the
    template specializations by turning this ``OFF``.
-
-#. ``LINE_SEARCH_MINIMIZER [Default: ON]``: The line search based
-   minimizer is mostly suitable for large scale optimization problems,
-   or when sparse linear algebra libraries are not available. You can
-   further save on some compile time and binary size by turning this
-   ``OFF``.
 
 #. ``OPENMP [Default: ON]``: On certain platforms like Android,
    multi-threading with ``OpenMP`` is not supported. Turn this ``OFF``
@@ -487,4 +504,3 @@ the **PATHS** option to the ``FIND_PACKAGE()`` command. e.g.,
 
 Note that this can be used to have multiple versions of Ceres
 installed.
-
