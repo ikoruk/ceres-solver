@@ -1,3 +1,13 @@
 Ceres Solver - A non-linear least squares minimizer
 ==================================================
 Please see docs/html/index.html for a tutorial and reference.
+
+
+Note: This fork is no longer supported. llvm clang now supports OpenMP natively.
+However, since Xcode's clang does not support OpenMP yet, I have included a homebrew
+build script, including patch, to enable ceres to use homebrew's llvm.
+
+To install Ceres with OpenMP on OSX (as of 7 Aug 2016):
+1. Download this repository's ceres-solver.rb
+2. brew install llvm
+3. brew install ceres-solver.rb
